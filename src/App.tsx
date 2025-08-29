@@ -1,6 +1,32 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { ScanningWorkflow } from './components/Scanning';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import './utils/testOcrSystem'; // Load OCR test utilities for browser console
+
+// Debug: Test basic OCR system availability
+console.log('🔧 App.tsx loaded - checking OCR system...');
+
+// Simple debug function
+const debugBasicSystem = async () => {
+  try {
+    console.log('🔍 Testing basic imports...');
+    const { ocrServiceWrapper } = await import('./services/ocrServiceWrapper');
+    console.log('✅ ocrServiceWrapper imported successfully');
+    
+    const health = await ocrServiceWrapper.getHealthStatus();
+    console.log('✅ Health check completed:', health);
+    
+    // Make available globally for browser console testing
+    (window as any).ocrServiceWrapper = ocrServiceWrapper;
+    console.log('✅ ocrServiceWrapper available on window object');
+    
+  } catch (error) {
+    console.error('❌ Basic system test failed:', error);
+  }
+};
+
+// Run debug test
+debugBasicSystem();
 
 function App() {
 

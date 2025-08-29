@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { useScanWorkflowStore, ScanWorkflowStep } from '../stores/scanWorkflowStore';
-import { ocrService, ContactData } from '../services/ocrService';
+import { ocrServiceWrapper } from '../services/ocrServiceWrapper';
 
 export const useScanWorkflow = () => {
   const {
@@ -29,24 +29,33 @@ export const useScanWorkflow = () => {
     setStep('processing');
     
     try {
-      // Initialize OCR service if needed
-      await ocrService.initialize();
+      // Process image with hybrid OCR service
+      const result = await ocrServiceWrapper.processImage(image);
+      const { data: contactData, stats } = result;
       
-      // Process image with OCR
-      const contactData: ContactData = await ocrService.processImage(image);
-      
-      // Check confidence threshold
-      if (!ocrService.isHighConfidence(contactData.confidence)) {
-        throw new Error(`Low OCR confidence: ${contactData.confidence.toFixed(1)}%. Please try with a clearer image.`);
+      // Check confidence threshold (60% minimum as configured)
+      if (stats.confidence < 60) {
+        throw new Error(`Low OCR confidence: ${stats.confidence.toFixed(1)}%. Please try with a clearer image.`);
       }
       
-      // Transform OCR result to match expected format
+      // Log processing stats for monitoring
+      console.log(`📊 Processing stats:`, {
+        processor: stats.processor,
+        time: stats.processingTime,
+        confidence: stats.confidence,
+        fallback: stats.fallbackUsed,
+        cost: stats.costEstimate
+      });
+      
+      // Set extracted data (already in correct format from ocrServiceWrapper)
       setExtractedData({
         name: contactData.name || 'Unknown',
-        company: contactData.company || 'Unknown',
+        title: contactData.title || undefined,
+        company: contactData.company || 'Unknown', 
         phone: contactData.phone || 'Not found',
         email: contactData.email || 'Not found',
         website: contactData.website || 'Not found',
+        address: contactData.address || undefined,
       });
       
       setStep('results');

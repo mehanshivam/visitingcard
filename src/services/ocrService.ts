@@ -1,4 +1,8 @@
 import { createWorker, Worker } from 'tesseract.js';
+import EmailParser from './parsers/emailParser';
+import PhoneParser from './parsers/phoneParser';
+import NameParser from './parsers/nameParser';
+import CompanyParser from './parsers/companyParser';
 
 export interface OCRResult {
   text: string;
@@ -540,7 +544,7 @@ class OCRService {
     const text = ocrResult.text;
     const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
     
-    console.log('Enhanced parsing with title and address support');
+    console.log('🚀 Enhanced parsing with enhanced parsers (basic mode)');
     
     const contactData: ContactData = {
       raw_text: text,
@@ -548,122 +552,78 @@ class OCRService {
       fieldConfidences: {}
     };
 
-    // Basic email extraction
-    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
-    const emailMatch = text.match(emailRegex);
-    if (emailMatch) {
-      contactData.email = emailMatch[0];
-      contactData.fieldConfidences!.email = 95;
+    // Use enhanced email parser
+    const emailResults = EmailParser.extractEmails(text);
+    const primaryEmail = EmailParser.getPrimaryEmail(emailResults);
+    
+    if (primaryEmail) {
+      contactData.email = primaryEmail.email;
+      contactData.fieldConfidences!.email = primaryEmail.confidence;
+      contactData.website = EmailParser.deriveWebsite(primaryEmail.email);
+      contactData.fieldConfidences!.website = Math.max(80, primaryEmail.confidence - 10);
+      console.log(`📧 Enhanced email detected: ${primaryEmail.email} (confidence: ${primaryEmail.confidence}%)`);
     }
 
-    // Basic phone extraction
-    const phonePatterns = [
-      /\+?1?[-.\s]?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})/,
-      /\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})/,
-      /([0-9]{3})[-.]([0-9]{3})[-.]([0-9]{4})/
-    ];
+    // Use enhanced phone parser
+    const phoneResults = PhoneParser.extractPhones(text);
+    const primaryPhone = PhoneParser.getPrimaryPhone(phoneResults);
     
-    for (const pattern of phonePatterns) {
-      const phoneMatch = text.match(pattern);
-      if (phoneMatch) {
-        contactData.phone = phoneMatch[0].trim();
-        contactData.fieldConfidences!.phone = 85;
-        break;
+    if (primaryPhone) {
+      contactData.phone = primaryPhone.formatted;
+      contactData.fieldConfidences!.phone = primaryPhone.confidence;
+      console.log(`📞 Enhanced phone detected: ${primaryPhone.formatted} (confidence: ${primaryPhone.confidence}%)`);
+    }
+
+    // Use enhanced name parser
+    const nameResult = NameParser.extractName(text);
+    if (nameResult) {
+      contactData.name = nameResult.name;
+      contactData.fieldConfidences!.name = nameResult.confidence;
+      
+      // If a title was separated from the name, use it
+      if (nameResult.title) {
+        contactData.title = nameResult.title;
+        contactData.fieldConfidences!.title = Math.max(70, nameResult.confidence - 10);
+      }
+      
+      console.log(`👤 Enhanced name detected: ${nameResult.name} (confidence: ${nameResult.confidence}%)`);
+      if (nameResult.title) {
+        console.log(`💼 Title separated from name: ${nameResult.title}`);
       }
     }
 
-    // Basic website from email
-    if (contactData.email) {
-      const domain = contactData.email.split('@')[1];
-      contactData.website = `www.${domain}`;
-      contactData.fieldConfidences!.website = 90;
+    // Use enhanced company parser (exclude detected name and title to avoid confusion)
+    const companyResult = CompanyParser.extractCompany(text, contactData.name, contactData.title);
+    if (companyResult) {
+      contactData.company = companyResult.company;
+      contactData.fieldConfidences!.company = companyResult.confidence;
+      console.log(`🏢 Enhanced company detected: ${companyResult.company} (confidence: ${companyResult.confidence}%)`);
     }
 
-    // Define keywords first for better detection
-    const titleKeywords = [
-      'ceo', 'cto', 'cfo', 'president', 'vice president', 'vp', 'director', 
-      'manager', 'senior', 'lead', 'head', 'chief', 'principal', 'associate',
-      'coordinator', 'specialist', 'analyst', 'consultant', 'engineer',
-      'developer', 'designer', 'architect', 'supervisor', 'executive',
-      'owner', 'founder', 'partner', 'sales', 'marketing', 'hr', 'admin'
-    ];
-    
-    const businessKeywords = ['llc', 'inc', 'corp', 'company', 'solutions', 'group', 'enterprises', 'ltd', 'limited'];
+    // Fallback title detection if not already detected
+    if (!contactData.title) {
+      const titleKeywords = [
+        'ceo', 'cto', 'cfo', 'president', 'vice president', 'vp', 'director', 
+        'manager', 'senior', 'lead', 'head', 'chief', 'principal', 'associate',
+        'coordinator', 'specialist', 'analyst', 'consultant', 'engineer',
+        'developer', 'designer', 'architect', 'supervisor', 'executive',
+        'marketing director', 'senior software engineer', 'software engineer'
+      ];
 
-    // Improved name detection - avoid titles and business terms
-    if (lines.length > 0) {
       for (const line of lines) {
         const lowerLine = line.toLowerCase();
         const hasTitle = titleKeywords.some(keyword => lowerLine.includes(keyword));
-        const hasBusiness = businessKeywords.some(keyword => lowerLine.includes(keyword));
         
-        if (!line.includes('@') && 
-            !line.match(/[0-9]{3}/) && 
-            !hasTitle &&
-            !hasBusiness &&
-            line.length > 2 && 
-            line.length < 50 &&
-            /^[A-Za-z\s\-\.]+$/.test(line)) { // Only letters, spaces, hyphens, dots
-          contactData.name = line;
-          console.log(`Name detected: ${line}`);
-          break;
-        }
-      }
-    }
-
-    // Enhanced job title detection
-    for (const line of lines) {
-      const lowerLine = line.toLowerCase();
-      const hasTitle = titleKeywords.some(keyword => lowerLine.includes(keyword));
-      
-      if (hasTitle && 
-          line !== contactData.name && 
-          !line.includes('@') && 
-          !line.match(/[0-9]{3}/) &&
-          line.length > 2 && 
-          line.length < 40) {
-        contactData.title = line;
-        console.log(`Title detected: ${line}`);
-        break;
-      }
-    }
-
-    // Enhanced company detection - prioritize business keywords over length
-    for (const line of lines) {
-      const lowerLine = line.toLowerCase();
-      const hasBusinessKeyword = businessKeywords.some(keyword => lowerLine.includes(keyword));
-      const hasTitle = titleKeywords.some(keyword => lowerLine.includes(keyword));
-      
-      // Priority 1: Lines with clear business keywords
-      if (hasBusinessKeyword && 
-          line !== contactData.name && 
-          line !== contactData.title &&
-          !line.includes('@') && 
-          !line.match(/[0-9]{3}/) &&
-          !hasTitle) {
-        contactData.company = line;
-        console.log(`Company detected (business keyword): ${line}`);
-        break;
-      }
-    }
-    
-    // Priority 2: If no business keyword found, look for longer lines that aren't taglines
-    if (!contactData.company) {
-      for (const line of lines) {
-        const lowerLine = line.toLowerCase();
-        const hasTitle = titleKeywords.some(keyword => lowerLine.includes(keyword));
-        const isShortTagline = line.length < 25 && (lowerLine.includes('innovative') || lowerLine.includes('leading') || lowerLine.includes('premier') || lowerLine.includes('solutions'));
-        
-        if (line !== contactData.name && 
-            line !== contactData.title &&
+        if (hasTitle && 
+            line !== contactData.name && 
+            line !== contactData.company &&
             !line.includes('@') && 
             !line.match(/[0-9]{3}/) &&
-            !hasTitle &&
-            !isShortTagline &&
-            line.length > 8 && 
-            line.length < 60) {
-          contactData.company = line;
-          console.log(`Company detected (fallback): ${line}`);
+            line.length > 2 && 
+            line.length < 50) {
+          contactData.title = line;
+          contactData.fieldConfidences!.title = 75;
+          console.log(`💼 Fallback title detected: ${line}`);
           break;
         }
       }
@@ -764,50 +724,65 @@ class OCRService {
   // === NEW STRUCTURED FIELD DETECTION METHODS ===
   
   private detectContactInfoWithStructure(contactData: ContactData, text: string): void {
-    // High-confidence email detection
-    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
-    const emailMatch = text.match(emailRegex);
-    if (emailMatch) {
-      contactData.email = emailMatch[0];
-      contactData.fieldConfidences!.email = 95; // Very high confidence for pattern match
-      console.log(`📧 Email detected: ${emailMatch[0]} (confidence: 95%)`);
-      
-      // Derive website from email domain with high confidence
-      const domain = emailMatch[0].split('@')[1];
-      contactData.website = `www.${domain}`;
-      contactData.fieldConfidences!.website = 90;
+    console.log('🚀 Using enhanced parsers for field detection...');
+    
+    // Enhanced email detection using new EmailParser
+    const emailResults = EmailParser.extractEmails(text);
+    const primaryEmail = EmailParser.getPrimaryEmail(emailResults);
+    
+    if (primaryEmail) {
+      contactData.email = primaryEmail.email;
+      contactData.fieldConfidences!.email = primaryEmail.confidence;
+      contactData.website = EmailParser.deriveWebsite(primaryEmail.email);
+      contactData.fieldConfidences!.website = Math.max(80, primaryEmail.confidence - 10);
+      console.log(`📧 Enhanced email detected: ${primaryEmail.email} (confidence: ${primaryEmail.confidence}%, primary: ${primaryEmail.isPrimary})`);
     }
     
-    // High-confidence phone detection
-    const phonePatterns = [
-      { pattern: /\+?1?[-\.\s]?\(?([0-9]{3})\)?[-\.\s]?([0-9]{3})[-\.\s]?([0-9]{4})/, confidence: 90 },
-      { pattern: /\(?([0-9]{3})\)?[-\.\s]?([0-9]{3})[-\.\s]?([0-9]{4})/, confidence: 85 },
-      { pattern: /([0-9]{3})[-.]([0-9]{3})[-.]([0-9]{4})/, confidence: 80 }
-    ];
+    // Enhanced phone detection using new PhoneParser
+    const phoneResults = PhoneParser.extractPhones(text);
+    const primaryPhone = PhoneParser.getPrimaryPhone(phoneResults);
     
-    for (const { pattern, confidence } of phonePatterns) {
-      const phoneMatch = text.match(pattern);
-      if (phoneMatch) {
-        contactData.phone = phoneMatch[0].trim();
-        contactData.fieldConfidences!.phone = confidence;
-        console.log(`📞 Phone detected: ${phoneMatch[0]} (confidence: ${confidence}%)`);
-        break;
-      }
+    if (primaryPhone) {
+      contactData.phone = primaryPhone.formatted;
+      contactData.fieldConfidences!.phone = primaryPhone.confidence;
+      console.log(`📞 Enhanced phone detected: ${primaryPhone.formatted} (confidence: ${primaryPhone.confidence}%, type: ${primaryPhone.type})`);
     }
   }
   
   private detectFieldsWithStructure(contactData: ContactData, layout: LayoutAnalysis, lines: string[]): void {
-    console.log('🔍 Running structured field detection...');
+    console.log('🔍 Running enhanced structured field detection...');
     
-    // Collect candidates for each field type
-    const nameCandidates = this.getNameCandidates(layout);
-    const titleCandidates = this.getTitleCandidates(layout);
-    const companyCandidates = this.getCompanyCandidates(layout);
+    // Use enhanced name parser
+    const nameResult = NameParser.extractName(contactData.raw_text);
+    if (nameResult) {
+      contactData.name = nameResult.name;
+      contactData.fieldConfidences!.name = nameResult.confidence;
+      
+      // If a title was separated from the name, use it
+      if (nameResult.title) {
+        contactData.title = nameResult.title;
+        contactData.fieldConfidences!.title = Math.max(70, nameResult.confidence - 10);
+      }
+      
+      console.log(`👤 Enhanced name detected: ${nameResult.name} (confidence: ${nameResult.confidence}%)`);
+      if (nameResult.title) {
+        console.log(`💼 Title separated from name: ${nameResult.title}`);
+      }
+    }
     
-    // Select best candidate for each field with confidence scoring
-    this.selectBestFieldCandidate(contactData, 'name', nameCandidates);
-    this.selectBestFieldCandidate(contactData, 'title', titleCandidates);
-    this.selectBestFieldCandidate(contactData, 'company', companyCandidates);
+    // Use enhanced company parser (exclude detected name and title to avoid confusion)
+    const companyResult = CompanyParser.extractCompany(contactData.raw_text, contactData.name, contactData.title);
+    if (companyResult) {
+      contactData.company = companyResult.company;
+      contactData.fieldConfidences!.company = companyResult.confidence;
+      console.log(`🏢 Enhanced company detected: ${companyResult.company} (confidence: ${companyResult.confidence}%, has suffix: ${companyResult.hasBusinessSuffix})`);
+    }
+    
+    // If we don't have a title yet, try to detect one separately
+    if (!contactData.title) {
+      const titleCandidates = this.getTitleCandidates(layout);
+      this.selectBestFieldCandidate(contactData, 'title', titleCandidates);
+    }
     
     // Address detection with confidence
     const addressData = this.extractAddress(lines);
